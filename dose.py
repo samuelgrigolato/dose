@@ -29,6 +29,7 @@ from datetime import datetime
 import os
 import time
 from fnmatch import fnmatch
+import json
 
 # Metadata (see setup.py for more information about these)
 __version__ = "1.0.0"
@@ -75,6 +76,10 @@ FILENAME_PATTERN_TO_IGNORE = "; ".join(["*.pyc",
                                         ".*"
                                        ])
 TIME_BEFORE_CALL = 1.0 # seconds between event and the call action
+CONFIG_FILE_NAME = ".dose.conf"
+CONFIG_DEFAULT_OPTIONS = {
+  "position": (-1, -1) # by default let the win system decide
+}
 
 def rounded_rectangle_region(width, height, radius):
   """
@@ -112,7 +117,7 @@ class DoseGraphicalSemaphore(wx.Frame):
   This class knows nothing about the led color meaning, and just print them
   at the screen.
   """
-  def __init__(self, parent, leds=FIRST_LEDS,
+  def __init__(self, parent, config, leds=FIRST_LEDS,
                width=FIRST_WIDTH, height=FIRST_HEIGHT,
                opacity=FIRST_OPACITY, flip=False):
     frame_style = (wx.FRAME_SHAPED |     # Allows wx.SetShape
@@ -120,7 +125,9 @@ class DoseGraphicalSemaphore(wx.Frame):
                    wx.STAY_ON_TOP |
                    wx.NO_BORDER
                   )
-    super(DoseGraphicalSemaphore, self).__init__(parent, style=frame_style)
+    pos = config.get_option("position")
+    super(DoseGraphicalSemaphore, self).__init__(parent, style=frame_style,
+                                                 pos=pos)
     #self.BackgroundStyle = wx.BG_STYLE_CUSTOM # Avoids flicker
     self.Bind(wx.EVT_ERASE_BACKGROUND, lambda evt: None)
     self.Bind(wx.EVT_WINDOW_CREATE,
@@ -224,8 +231,9 @@ class DoseInteractiveSemaphore(DoseGraphicalSemaphore):
   """
   Just a DojoGraphicalSemaphore, but now responsive to left click
   """
-  def __init__(self, parent):
-    super(DoseInteractiveSemaphore, self).__init__(parent)
+  def __init__(self, parent, config):
+    super(DoseInteractiveSemaphore, self).__init__(parent, config)
+    self._config = config
     self._timer = wx.Timer(self)
     self.Bind(wx.EVT_LEFT_DOWN, self.on_left_down)
     self.Bind(wx.EVT_TIMER, self.on_timer, self._timer)
@@ -243,6 +251,7 @@ class DoseInteractiveSemaphore(DoseGraphicalSemaphore):
     ctrl_is_down = wx.GetKeyState(wx.WXK_CONTROL)
     shift_is_down = wx.GetKeyState(wx.WXK_SHIFT)
     ms = wx.GetMouseState()
+    new_pos = None
 
     # New initialization when keys pressed change
     if self._key_state != (ctrl_is_down, shift_is_down):
@@ -292,15 +301,18 @@ class DoseInteractiveSemaphore(DoseGraphicalSemaphore):
           # Center should be kept
           center_x = self._click_frame_x + self._click_frame_width / 2
           center_y = self._click_frame_y + self._click_frame_height / 2
-          self.Position = (center_x - new_w / 2,
-                           center_y - new_h / 2)
-
-          self.Refresh()
+          new_pos = (center_x - new_w / 2,
+                     center_y - new_h / 2)
 
         # Move the window
         if not (ctrl_is_down or shift_is_down):
-          self.Position = (self._click_frame_x + delta_x,
-                           self._click_frame_y + delta_y)
+          new_pos = (self._click_frame_x + delta_x,
+                     self._click_frame_y + delta_y)
+
+      if new_pos is not None:
+        self._config.set_option("position", new_pos)
+        self.Position = new_pos
+        self.Refresh()
 
       # Since left button is kept down, there should be another one shot
       # timer event again, without creating many timers like wx.CallLater
@@ -485,11 +497,58 @@ class DoseWatcher(object):
       self._watching = False
 
 
+class DoseConfig:
+  """
+  Handle load and storage of configuration options.
+
+  When dose starts, try to load configurations from
+  a file named ".dose.conf" in the following 
+  locations:
+
+  1) Working directory (TODO!)
+  2) User home
+
+  If none of these files are present, dose 
+  fallback to default values.
+  """
+
+  def get_option(self, key):
+    return self._config[key]
+
+  def set_option(self, key, value):
+    self._config[key] = value
+
+  def _user_home_config_file_path(self):
+    user_home = os.path.expanduser("~")
+    path = os.path.join(user_home, CONFIG_FILE_NAME)
+    return path
+
+  def store_options(self):
+    """
+    Store options in the user's home, only if 
+    dose has not been launched with working 
+    directory configs (TODO!).
+    """
+    path = self._user_home_config_file_path()
+    config_file = open(path, "w")
+    json.dump(self._config, config_file, indent=4, separators=(',',': '))
+
+  def __init__(self):
+    path = self._user_home_config_file_path()
+    if os.path.exists(path):
+      config_file = open(path, "r")
+      self._config = json.load(config_file)
+    else:
+      self._config = CONFIG_DEFAULT_OPTIONS
+
+
 class DoseMainWindow(DoseInteractiveSemaphore, DoseWatcher):
 
   def __init__(self, parent):
-    DoseInteractiveSemaphore.__init__(self, parent)
+    config = DoseConfig()
+    DoseInteractiveSemaphore.__init__(self, parent, config)
     DoseWatcher.__init__(self)
+    self._config = config
     self.SetTitle("Disabled - dose") # Seen by the window manager
     self.popmenu = {k:DosePopupMenu(self, k) for k in (True, False)}
 
@@ -568,6 +627,7 @@ class DoseMainWindow(DoseInteractiveSemaphore, DoseWatcher):
     if evt.EventObject is not self: # Avoid deadlocks
       self.Close() # wx.Frame
     evt.Skip()
+    self._config.store_options()
 
   def on_help_and_about(self, evt):
     abinfo = wx.AboutDialogInfo()
