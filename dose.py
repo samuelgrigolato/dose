@@ -78,7 +78,10 @@ FILENAME_PATTERN_TO_IGNORE = "; ".join(["*.pyc",
 TIME_BEFORE_CALL = 1.0 # seconds between event and the call action
 CONFIG_FILE_NAME = ".dose.conf"
 CONFIG_DEFAULT_OPTIONS = {
-  "position": (-1, -1) # by default let the win system decide
+  "position": (-1, -1), # by default let the win system decide
+  "size": (FIRST_WIDTH, FIRST_HEIGHT),
+  "opacity": FIRST_OPACITY,
+  "flipped": False
 }
 
 def rounded_rectangle_region(width, height, radius):
@@ -117,15 +120,17 @@ class DoseGraphicalSemaphore(wx.Frame):
   This class knows nothing about the led color meaning, and just print them
   at the screen.
   """
-  def __init__(self, parent, config, leds=FIRST_LEDS,
-               width=FIRST_WIDTH, height=FIRST_HEIGHT,
-               opacity=FIRST_OPACITY, flip=False):
+  def __init__(self, parent, config, leds=FIRST_LEDS):
+    self._config = config
     frame_style = (wx.FRAME_SHAPED |     # Allows wx.SetShape
                    wx.FRAME_NO_TASKBAR |
                    wx.STAY_ON_TOP |
                    wx.NO_BORDER
                   )
     pos = config.get_option("position")
+    size = config.get_option("size")
+    opacity = config.get_option("opacity")
+    flip = config.get_option("flipped")
     super(DoseGraphicalSemaphore, self).__init__(parent, style=frame_style,
                                                  pos=pos)
     #self.BackgroundStyle = wx.BG_STYLE_CUSTOM # Avoids flicker
@@ -135,7 +140,7 @@ class DoseGraphicalSemaphore(wx.Frame):
              ) # Needed to at least have transparency on wxGTK
     self._paint_width, self._paint_height = 0, 0 # Ensure update_sizes at
                                                  # first on_paint
-    self.ClientSize = (width, height)
+    self.ClientSize = size
     self._flip = flip
     self.opacity = opacity
     self.Bind(wx.EVT_PAINT, self.on_paint)
@@ -159,6 +164,7 @@ class DoseGraphicalSemaphore(wx.Frame):
   @opacity.setter
   def opacity(self, value):
     self._opacity = value
+    self._config.set_option("opacity", value)
     self.SetTransparent(self.opacity)
 
   @property
@@ -169,6 +175,7 @@ class DoseGraphicalSemaphore(wx.Frame):
   def flip(self, value):
     if self._flip != value:
       self._flip = value
+      self._config.set_option("flipped", value)
       self.Refresh()
 
   def on_paint(self, evt):
@@ -295,7 +302,9 @@ class DoseInteractiveSemaphore(DoseGraphicalSemaphore):
           new_h = max(MIN_HEIGHT, self._click_frame_height +
                                   2 * delta_y * self._quad_signal_y
                      )
-          self.ClientSize = new_w, new_h
+          new_size = new_w, new_h
+          self.ClientSize = new_size
+          self._config.set_option("size", new_size)
           self.SendSizeEvent() # Needed for wxGTK
 
           # Center should be kept
@@ -513,7 +522,7 @@ class DoseConfig:
   """
 
   def get_option(self, key):
-    return self._config[key]
+    return self._config.get(key, CONFIG_DEFAULT_OPTIONS[key])
 
   def set_option(self, key, value):
     self._config[key] = value
